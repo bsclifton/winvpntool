@@ -236,6 +236,18 @@ int PrintEntryDetails(LPCTSTR entry_name) {
         // great place to set debug breakpoint when inspecting existing connections
         PrintOptions(lpRasEntry->dwfOptions);
         PrintOptions2(lpRasEntry->dwfOptions2);
+        LPBYTE custom_data = NULL;
+        dwRet = RasGetCustomAuthData(DEFAULT_PHONE_BOOK, entry_name, custom_data, &dwCb);
+        if (dwRet == ERROR_BUFFER_TOO_SMALL && dwCb > 0) {
+            custom_data = (LPBYTE)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, dwCb);
+            dwRet = RasGetCustomAuthData(DEFAULT_PHONE_BOOK, entry_name, custom_data, &dwCb);
+            // TODO: what is this?
+            HeapFree(GetProcessHeap(), 0, custom_data);
+        }
+
+        if (lpRasEntry->dwSubEntries > 0) {
+            // TODO: ...
+        }
 
         wprintf(L"\n");
         //Deallocate memory for the entry buffer
@@ -295,43 +307,36 @@ int PrintEntries() {
     return 0;
 }
 
+// https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-formatmessage
 void PrintSystemError(DWORD error) {
-    LPTSTR lpMsgBuf = NULL;
+    DWORD cBufSize = 512;
+    TCHAR lpszErrorString[512];
+
     DWORD bufLen = FormatMessage(
-        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
         NULL,
         error,
         MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-        lpMsgBuf,
-        0, NULL);
+        lpszErrorString,
+        cBufSize, NULL);
     if (bufLen) {
-        wprintf(L"%s\n", lpMsgBuf);
-        LocalFree(lpMsgBuf);
+        wprintf(L"%s\n", lpszErrorString);
     }
 }
 
+// https://docs.microsoft.com/en-us/windows/win32/api/ras/nf-ras-rasgeterrorstringa
 void PrintRasError(DWORD error) {
-    switch (error) {
-        case ERROR_CANNOT_OPEN_PHONEBOOK:
-            wprintf(L"The system could not open the phone book file.\n");
-            break;
-        case ERROR_CANNOT_FIND_PHONEBOOK_ENTRY:
-            wprintf(L"The system could not find the phone book entry for this connection.\n");
-            break;
-        case ERROR_INVALID_PARAMETER:
-        case ERROR_ACCESS_DENIED:
-            PrintSystemError(error);
-            break;
-        default:
-            // if you want to be fancy, you can load module handle for `Rasapi32.lib`
-            if (error > RASBASE && error < RASBASEEND) {
-                wprintf(L"Ras error; check RasError.h for code %d", error);
-            } else {
-                wprintf(L"OTHER ERROR: (%d) ", error);
-                PrintSystemError(error);
-            }
-            break;
+    DWORD cBufSize = 512;
+    TCHAR lpszErrorString[512];
+
+    if (error > RASBASE && error < RASBASEEND) {
+        if (RasGetErrorString(error, lpszErrorString, cBufSize) == ERROR_SUCCESS) {
+            wprintf(L"%s\n", lpszErrorString);
+            return;
+        }
     }
+    
+    PrintSystemError(error);
 }
 
 // https://docs.microsoft.com/en-us/windows/win32/api/ras/nf-ras-rassetcredentialsa
@@ -368,11 +373,12 @@ DWORD CreateEntry(LPCTSTR entry_name, LPCTSTR hostname, LPCTSTR username, LPCTST
     wcscpy_s(entry.szDeviceType, 16, RASDT_Vpn);
     wcscpy_s(entry.szDeviceName, 128, TEXT("WAN Miniport (IKEv2)"));
     entry.dwType = RASET_Vpn;
-    entry.dwEncryptionType = ET_Require; //3 = ET_Optional
-    entry.dwCustomAuthKey = 26; //???
-    // entry.guidId ??
+    entry.dwEncryptionType = ET_Optional;
+    entry.dwCustomAuthKey = 26; // TODO: what is this???
     entry.dwVpnStrategy = VS_Ikev2Only;
     entry.dwfOptions2 = RASEO2_DontNegotiateMultilink | RASEO2_ReconnectIfDropped | RASEO2_IPv6RemoteDefaultGateway | RASEO2_CacheCredentials;  
+    entry.dwRedialCount = 3;
+    entry.dwRedialPause = 60;
 
     DWORD dwRet = RasSetEntryProperties(DEFAULT_PHONE_BOOK, entry_name, &entry, entry.dwSize, NULL, NULL);
     if (dwRet != ERROR_SUCCESS) {
@@ -390,7 +396,6 @@ DWORD CreateEntry(LPCTSTR entry_name, LPCTSTR hostname, LPCTSTR username, LPCTST
 
     // TODO: what options needed?
     // - `Provider` should be `Windows (built-in)
-    // - `Credentials` - are they set here? or separately (ex: with RasSetCredentials)
     SetCredentials(entry_name, username, password);
 
     return ERROR_SUCCESS;
