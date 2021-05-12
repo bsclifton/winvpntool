@@ -3,7 +3,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 16
 VisualStudioVersion = 16.0.30709.132
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "windows-vpn-poc", "windows-vpn-poc.vcxproj", "{8E66BB5B-87E3-485A-A5CF-8BF63C00AF4F}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "winvpntool", "winvpntool.vcxproj", "{8E66BB5B-87E3-485A-A5CF-8BF63C00AF4F}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
