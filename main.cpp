@@ -506,16 +506,14 @@ DWORD CreateEntry(LPCTSTR entry_name, LPCTSTR hostname, LPCTSTR username, LPCTST
     entry.dwType = RASET_Vpn;
     entry.dwEncryptionType = ET_Optional;
     
-    entry.dwCustomAuthKey = 26; // TODO: what is this??? 26 is what I get for connection I'm trying to mirror.
-    
+    //TODO: don't know what this is
+    entry.dwCustomAuthKey = 26; // 26 is what I get for connection I'm trying to mirror.
+    //END TODO
+
     entry.dwVpnStrategy = VS_Ikev2Only;
     entry.dwfOptions2 = RASEO2_DontNegotiateMultilink | RASEO2_ReconnectIfDropped | RASEO2_IPv6RemoteDefaultGateway | RASEO2_CacheCredentials;  
     entry.dwRedialCount = 3;
     entry.dwRedialPause = 60;
-
-    //TODO: don't know what this is
-
-    //END TODO
 
     DWORD dwRet = RasSetEntryProperties(DEFAULT_PHONE_BOOK, entry_name, &entry, entry.dwSize, NULL, NULL);
     if (dwRet != ERROR_SUCCESS) {
