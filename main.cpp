@@ -4,16 +4,22 @@
 #include <ras.h>
 #include <raserror.h>
 #include <ipsectypes.h>
+#include <MprApi.h>
 
 // Simple Windows VPN configuration tool (using RAS API)
 // By Brian Clifton (brian@clifton.me)
 //
-// See https://docs.microsoft.com/en-us/windows/win32/rras/remote-access-service-functions
+// RAS API docs
+// https://docs.microsoft.com/en-us/windows/win32/rras/remote-access-service-functions
+// 
+// MPR API docs
+// https://docs.microsoft.com/en-us/windows/win32/api/mprapi/
 //
 // NOTES:
 // RAS = Remote Access Service
 // EAP = Extensible Authentication Protocol
-// 
+// MPR = Multiprotocol Routing
+//
 
 #define DEFAULT_PHONE_BOOK NULL
 
@@ -49,6 +55,34 @@ void PrintRasError(DWORD error) {
     PrintSystemError(error);
 }
 
+// https://docs.microsoft.com/en-us/windows/win32/api/mprapi/nf-mprapi-mprconfiginterfaceenum
+int PrintInterfaces() {
+    HANDLE hMprConfig = INVALID_HANDLE_VALUE;
+    DWORD dwRet = MprConfigServerConnect(NULL, &hMprConfig);
+    if (dwRet != ERROR_SUCCESS) {
+        PrintRasError(dwRet);
+    }
+
+    LPBYTE lpBuffer = NULL;
+    DWORD entries_read = 0, total_entries = 0;
+    dwRet = MprConfigInterfaceEnum(hMprConfig, 0, &lpBuffer, -1, &entries_read, &total_entries, NULL);
+    if (dwRet == NO_ERROR) {
+        for (DWORD i = 0; i < entries_read; i++) {
+            // MPR_INTERFACE_0 interface = lpBuffer[i];
+        }
+    } else {
+        wprintf(L"Error calling MprConfigInterfaceEnum: ");
+        PrintRasError(dwRet);
+    }
+
+    if (lpBuffer) {
+        MprConfigBufferFree(lpBuffer);
+        lpBuffer = NULL;
+    }
+
+    return 0;
+}
+
 int PrintConnectionDetails(HRASCONN connection) {
     DWORD dwCb = 0;
     DWORD dwRet = ERROR_SUCCESS;
@@ -70,7 +104,34 @@ int PrintConnectionDetails(HRASCONN connection) {
         }
 
         if (lpProjectionInfo->type == PROJECTION_INFO_TYPE_IKEv2) {
+            // See _RASIKEV2_PROJECTION_INFO in Ras.h for full list of fields.
+            // Fields commented out are not implemented (ex: IPv6).
             wprintf(L"\ttype=PROJECTION_INFO_TYPE_IKEv2");
+
+            // IPv4 Projection Parameters
+            wprintf(L"\n\tdwIPv4NegotiationError=%d", lpProjectionInfo->ikev2.dwIPv4NegotiationError);
+            wprintf(L"\n\tipv4Address=");
+            printf("%s", inet_ntoa(lpProjectionInfo->ikev2.ipv4Address));
+            wprintf(L"\n\tipv4ServerAddress=");
+            printf("%s", inet_ntoa(lpProjectionInfo->ikev2.ipv4ServerAddress));
+
+            // IPv6 Projection Parameters
+            //DWORD         dwIPv6NegotiationError;
+            //RASIPV6ADDR   ipv6Address;
+            //RASIPV6ADDR   ipv6ServerAddress;
+            //DWORD         dwPrefixLength;
+
+            // AUTH
+            wprintf(L"\n\tdwAuthenticationProtocol=");
+            if (lpProjectionInfo->ikev2.dwAuthenticationProtocol == RASIKEv2_AUTH_MACHINECERTIFICATES) wprintf(L"RASIKEv2_AUTH_MACHINECERTIFICATES");
+            else if (lpProjectionInfo->ikev2.dwAuthenticationProtocol == RASIKEv2_AUTH_EAP) wprintf(L"RASIKEv2_AUTH_EAP");
+            wprintf(L"\n\tdwEapTypeId=%d", lpProjectionInfo->ikev2.dwEapTypeId);
+
+            // -
+            wprintf(L"\n\tdwFlags=");
+            if (lpProjectionInfo->ikev2.dwFlags & RASIKEv2_FLAGS_MOBIKESUPPORTED) wprintf(L"RASIKEv2_FLAGS_MOBIKESUPPORTED, ");
+            if (lpProjectionInfo->ikev2.dwFlags & RASIKEv2_FLAGS_BEHIND_NAT) wprintf(L"RASIKEv2_FLAGS_BEHIND_NAT, ");
+            if (lpProjectionInfo->ikev2.dwFlags & RASIKEv2_FLAGS_SERVERBEHIND_NAT) wprintf(L"RASIKEv2_FLAGS_SERVERBEHIND_NAT");
             wprintf(L"\n\tdwEncryptionMethod=");
             // https://docs.microsoft.com/en-us/windows/win32/api/ipsectypes/ne-ipsectypes-ipsec_cipher_type
             if (lpProjectionInfo->ikev2.dwEncryptionMethod == IPSEC_CIPHER_TYPE_DES) wprintf(L"IPSEC_CIPHER_TYPE_DES");
@@ -80,7 +141,15 @@ int PrintConnectionDetails(HRASCONN connection) {
             else if (lpProjectionInfo->ikev2.dwEncryptionMethod == IPSEC_CIPHER_TYPE_AES_256) wprintf(L"IPSEC_CIPHER_TYPE_AES_256");
             else wprintf(L"unknown (%d)", lpProjectionInfo->ikev2.dwEncryptionMethod);
 
-            // ...
+            // -
+            wprintf(L"\n\tnumIPv4ServerAddresses=%d", lpProjectionInfo->ikev2.numIPv4ServerAddresses);
+            wprintf(L"\n\tipv4ServerAddresses=");
+            for (DWORD j = 0; j < lpProjectionInfo->ikev2.numIPv4ServerAddresses; j++) {
+                printf("%s", inet_ntoa(lpProjectionInfo->ikev2.ipv4ServerAddresses[j]));
+                if ((j + 1) < lpProjectionInfo->ikev2.numIPv4ServerAddresses) wprintf(L", ");
+            }
+            wprintf(L"\n\tnumIPv6ServerAddresses=%d", lpProjectionInfo->ikev2.numIPv6ServerAddresses);
+            //RASIPV6ADDR* ipv6ServerAddresses;
         } else if (lpProjectionInfo->type == PROJECTION_INFO_TYPE_PPP) {
             wprintf(L"\ttype=PROJECTION_INFO_TYPE_PPP");
         }
@@ -507,7 +576,8 @@ DWORD CreateEntry(LPCTSTR entry_name, LPCTSTR hostname, LPCTSTR username, LPCTST
     entry.dwEncryptionType = ET_Optional;
     
     //TODO: don't know what this is
-    entry.dwCustomAuthKey = 26; // 26 is what I get for connection I'm trying to mirror.
+    //entry.dwCustomAuthKey = 26; // 26 is what I get for connection I'm trying to mirror.
+    // I've verified copying the RasGetEapUserData from known good connection to new connection doesn't set policy
     //END TODO
 
     entry.dwVpnStrategy = VS_Ikev2Only;
@@ -519,25 +589,77 @@ DWORD CreateEntry(LPCTSTR entry_name, LPCTSTR hostname, LPCTSTR username, LPCTST
     if (dwRet != ERROR_SUCCESS) {
         PrintRasError(dwRet);
         return dwRet;
+    }    
+
+    dwRet = SetCredentials(entry_name, username, password);
+
+    // Policy needs to be set, otherwise you'll see an error like this in `eventvwr`:
+    // >> The user DESKTOP - DRCJVG6\brian dialed a connection named BRAVEVPN which has failed.The error code returned on failure is 13868.
+    // 
+    // I've found you can set this manually via PowerShell using the `Set-VpnConnectionIPsecConfiguration` cmdlet:
+    // https://docs.microsoft.com/en-us/powershell/module/vpnclient/set-vpnconnectionipsecconfiguration?view=windowsserver2019-ps
+    // 
+    // I've used the following parameters via PowerShell
+    // >> AuthenticationTransformConstants: GCMAES256 -
+    // >> CipherTransformConstants : GCMAES256
+    // >> DHGroup : ECP384 - 
+    // >> IntegrityCheckMethod : SHA256 -
+    // >> PfsGroup : None -
+    // >> EncryptionMethod : GCMAES256
+    //
+    // In C++, we use the MPR API to set these.
+    PROUTER_CUSTOM_IKEv2_POLICY0 lpCustomIkev2Policy;
+    lpCustomIkev2Policy = (PROUTER_CUSTOM_IKEv2_POLICY0)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(ROUTER_CUSTOM_IKEv2_POLICY0));
+    if (lpCustomIkev2Policy == NULL) {
+        // Handle OOM
+        wprintf(L"whoops; out of memory");
+    }
+    // Work in progress
+    // For more info, see example at https://github.com/microsoft/Windows-classic-samples/blob/27ffb0811ca761741502feaefdb591aebf592193/Samples/RoutingandRemoteAccessService/cpp/InterfaceConfiguration.cpp#L505
+    lpCustomIkev2Policy->dwIntegrityMethod = IKEEXT_INTEGRITY_SHA_256;
+    lpCustomIkev2Policy->dwEncryptionMethod = IKEEXT_CIPHER_AES_GCM_256_16ICV;
+    lpCustomIkev2Policy->dwCipherTransformConstant = IKEEXT_CIPHER_AES_GCM_256_16ICV;
+    lpCustomIkev2Policy->dwAuthTransformConstant = IPSEC_AUTH_CONFIG_GCM_AES_256;
+    lpCustomIkev2Policy->dwPfsGroup = IPSEC_PFS_NONE;
+    lpCustomIkev2Policy->dwDhGroup = IKEEXT_DH_ECP_384;
+
+    MPR_IF_CUSTOMINFOEX mprInterfaceCustomInfo;
+    ZeroMemory(&mprInterfaceCustomInfo, sizeof(MPR_IF_CUSTOMINFOEX));
+    mprInterfaceCustomInfo.Header.revision = MPRAPI_MPR_IF_CUSTOM_CONFIG_OBJECT_REVISION_2;
+    mprInterfaceCustomInfo.Header.type = MPRAPI_OBJECT_TYPE_IF_CUSTOM_CONFIG_OBJECT;
+    mprInterfaceCustomInfo.Header.size = sizeof(MPR_IF_CUSTOMINFOEX);
+    mprInterfaceCustomInfo.dwFlags = MPRAPI_IF_CUSTOM_CONFIG_FOR_IKEV2;
+    mprInterfaceCustomInfo.customIkev2Config.customPolicy = lpCustomIkev2Policy;
+
+    HANDLE hMprConfig = INVALID_HANDLE_VALUE;
+    dwRet = MprConfigServerConnect(NULL, &hMprConfig);
+    if (dwRet != ERROR_SUCCESS) {
+        PrintRasError(dwRet);
     }
 
-    //TODO: how to set items the same as Powershell??
-    // https://docs.microsoft.com/en-us/powershell/module/vpnclient/set-vpnconnectionipsecconfiguration?view=windowsserver2019-ps
-    // it's possible this is setting a policy on the computer and NOT the VPN entry
-    //
-    //AuthenticationTransformConstants: GCMAES256
-    //CipherTransformConstants : GCMAES256
-    //DHGroup : ECP384
-    //IntegrityCheckMethod : SHA256
-    //PfsGroup : None
-    //EncryptionMethod : GCMAES256
+    //HANDLE hRouterInterface = INVALID_HANDLE_VALUE;
+    //dwRet = MprConfigInterfaceGetHandle(hMprConfig, NULL, &hRouterInterface);
 
-    return SetCredentials(entry_name, username, password);
+    // MprConfigInterfaceSetCustomInfoEx()
+    // TODO: ...
+
+    HeapFree(GetProcessHeap(), 0, lpCustomIkev2Policy);
+
+    return ERROR_SUCCESS;
+}
+
+DWORD RemoveEntry(LPCTSTR entry_name) {
+    DWORD dwRet = RasDeleteEntry(DEFAULT_PHONE_BOOK, entry_name);
+    if (dwRet != ERROR_SUCCESS) {
+        PrintRasError(dwRet);
+        return dwRet;
+    }
+    return dwRet;
 }
 
 int wmain(int argc, wchar_t* argv[]) {    
     if (argc == 1) {
-        wprintf(L"usage: winvpntool.exe [--connections] [--devices] [--entries]");
+        wprintf(L"usage: winvpntool.exe [--connections] [--devices] [--entries] [--create hostname username password]");
         return 0;
     }
 
@@ -553,15 +675,36 @@ int wmain(int argc, wchar_t* argv[]) {
         }
 
         if (wcscmp(argv[i], L"--create") == 0) {
-            // TODO: parse name/hostname/username/password
+            if ((i + 4) >= argc) {
+                wprintf(L"missing parameters for create!\nusage: winvpntool.exe --create entry_name hostname.domain.com username password");
+                return 0;
+            }
+            
+            wchar_t entry_name[257] = { 0 }, hostname[129] = { 0 }, username[257] = { 0 }, password[257] = { 0 };
+            wcscpy_s(entry_name, 256, argv[i + 1]);
+            wcscpy_s(hostname, 128, argv[i + 2]);
+            wcscpy_s(username, 256, argv[i + 3]);
+            wcscpy_s(password, 256, argv[i + 4]);
+
             // TODO: make this create OR update
-            CreateEntry(TEXT("BUBBA"), TEXT("hostname.website.com"), TEXT("bsmith"), TEXT("Password1!"));
+            DWORD dwRet = CreateEntry(entry_name, hostname, username, password);
+            i += 4;
         }
         
-        // TODO: --remove (parse name)
+        if (wcscmp(argv[i], L"--remove") == 0) {
+            if ((i + 1) >= argc) {
+                wprintf(L"missing parameters for create!\nusage: winvpntool.exe --remove entry_name");
+                return 0;
+            }
+
+            wchar_t entry_name[257] = { 0 };
+            wcscpy_s(entry_name, 256, argv[i + 1]);
+
+            RemoveEntry(entry_name);
+
+            i += 1;
+        }
     }
 
-    
-
-	return 0;
+    return 0;
 }
