@@ -659,7 +659,7 @@ DWORD RemoveEntry(LPCTSTR entry_name) {
 
 int wmain(int argc, wchar_t* argv[]) {    
     if (argc == 1) {
-        wprintf(L"usage: winvpntool.exe [--connections] [--devices] [--entries] [--create hostname username password]");
+        wprintf(L"usage: winvpntool.exe [--connections] [--devices] [--entries] [--create hostname username password] [--remove]");
         return 0;
     }
 
