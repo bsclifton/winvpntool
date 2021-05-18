@@ -574,16 +574,13 @@ DWORD CreateEntry(LPCTSTR entry_name, LPCTSTR hostname, LPCTSTR username, LPCTST
     wcscpy_s(entry.szDeviceName, 128, TEXT("WAN Miniport (IKEv2)"));
     entry.dwType = RASET_Vpn;
     entry.dwEncryptionType = ET_Optional;
-    
-    //TODO: don't know what this is
-    //entry.dwCustomAuthKey = 26; // 26 is what I get for connection I'm trying to mirror.
-    // I've verified copying the RasGetEapUserData from known good connection to new connection doesn't set policy
-    //END TODO
-
     entry.dwVpnStrategy = VS_Ikev2Only;
     entry.dwfOptions2 = RASEO2_DontNegotiateMultilink | RASEO2_ReconnectIfDropped | RASEO2_IPv6RemoteDefaultGateway | RASEO2_CacheCredentials;  
     entry.dwRedialCount = 3;
     entry.dwRedialPause = 60;
+
+    // this maps to "Type of sign-in info" => "User name and password"
+    entry.dwCustomAuthKey = 26;
 
     DWORD dwRet = RasSetEntryProperties(DEFAULT_PHONE_BOOK, entry_name, &entry, entry.dwSize, NULL, NULL);
     if (dwRet != ERROR_SUCCESS) {
@@ -612,8 +609,9 @@ DWORD CreateEntry(LPCTSTR entry_name, LPCTSTR hostname, LPCTSTR username, LPCTST
     lpCustomIkev2Policy = (PROUTER_CUSTOM_IKEv2_POLICY0)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(ROUTER_CUSTOM_IKEv2_POLICY0));
     if (lpCustomIkev2Policy == NULL) {
         // Handle OOM
-        wprintf(L"whoops; out of memory");
+        wprintf(L"\nwhoops; out of memory");
     }
+
     // Work in progress
     // For more info, see example at https://github.com/microsoft/Windows-classic-samples/blob/27ffb0811ca761741502feaefdb591aebf592193/Samples/RoutingandRemoteAccessService/cpp/InterfaceConfiguration.cpp#L505
     lpCustomIkev2Policy->dwIntegrityMethod = IKEEXT_INTEGRITY_SHA_256;
