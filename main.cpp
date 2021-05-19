@@ -380,9 +380,6 @@ int PrintEntryDetails(LPCTSTR entry_name) {
         PrintOptions(lpRasEntry->dwfOptions);
         PrintOptions2(lpRasEntry->dwfOptions2);
 
-        // RasGetEntryAdvancedProperties();
-
-
         // https://docs.microsoft.com/en-us/windows/win32/api/ras/nf-ras-rasgetcustomauthdataa
         LPBYTE custom_auth_data = NULL;
         dwRet = RasGetCustomAuthData(DEFAULT_PHONE_BOOK, entry_name, custom_auth_data, &dwCb);
@@ -628,50 +625,63 @@ DWORD CreateEntry(LPCTSTR entry_name, LPCTSTR hostname, LPCTSTR username, LPCTST
     // 
     // ############################
     // 
-    // At this point - I think the undocumented methods I found are likely called by PowerShell (ex: `RasGetEntryAdvancedProperties`)
+    // I suspect the PowerShell is either calling the undocumented API (ex: ``) or writing the fields manually.
+    // We should write the fields manually.
     // 
-    // I'm going to try to define/call these methods and see what happens
-    // 
-    // Worst case: we can manually add the entry (or field) to the `%APPDATA%\Microsoft\Network\Connections\Pbk\rasphone.pbk` file.
+    // ############################
     // 
     // NOTE: *This IKEv2 implementation (due to policy) might only be supported on Windows 8 and above; we need to check that.*
     // 
 
-    union {
-        ROUTER_CUSTOM_IKEv2_POLICY0 object;
-        DWORD fields[6];
-        BYTE bytes[24];
-    } policy;
-    
-    policy.object.dwIntegrityMethod = IKEEXT_INTEGRITY_SHA_256;
-    policy.object.dwEncryptionMethod = IKEEXT_CIPHER_AES_GCM_256_16ICV;
-    policy.object.dwCipherTransformConstant = IKEEXT_CIPHER_AES_GCM_256_16ICV;
-    policy.object.dwAuthTransformConstant = IPSEC_AUTH_CONFIG_GCM_AES_256;
-    policy.object.dwPfsGroup = IPSEC_PFS_NONE;
-    policy.object.dwDhGroup = IKEEXT_DH_ECP_384;
+    // for an example of how this value is generated (hardcoded for now), see below Demo() function
+    wchar_t replacement[] = L"NumCustomPolicy=1\r\nCustomIPSecPolicies=020000000600000005000000080000000500000000000000";
 
+    // TODO:
+    // 
+    // 1. Open phonebook file (`%APPDATA%\Microsoft\Network\Connections\Pbk\rasphone.pbk`)
+    // 2. Find value `NumCustomPolicy=0` in file for entry `[entry_name]`
+    // 3. do replacement
 
     return ERROR_SUCCESS;
 }
 
-void Demo() {
-    union {
-        ROUTER_CUSTOM_IKEv2_POLICY0 object;
-        DWORD fields[6];
-        BYTE bytes[24];
-    } policy;
+void copy_dword_bytes(BYTE* bytes, DWORD value) {
+    if (bytes) {
+        union {
+            DWORD value;
+            BYTE bytes[4];
+        } converter;
+        converter.value = value;
+        memcpy(bytes, converter.bytes, 4);
+    }
+}
 
-    policy.object.dwIntegrityMethod = IKEEXT_INTEGRITY_SHA_256;
-    policy.object.dwEncryptionMethod = IKEEXT_CIPHER_AES_GCM_256_16ICV;
-    policy.object.dwCipherTransformConstant = IKEEXT_CIPHER_AES_GCM_256_16ICV;
-    policy.object.dwAuthTransformConstant = IPSEC_AUTH_CONFIG_GCM_AES_256;
-    policy.object.dwPfsGroup = IPSEC_PFS_NONE;
-    policy.object.dwDhGroup = IKEEXT_DH_ECP_384;
+void Demo() {
+    // These are the values set
+    ROUTER_CUSTOM_IKEv2_POLICY0 policy;
+    policy.dwIntegrityMethod = IKEEXT_INTEGRITY_SHA_256;
+    policy.dwEncryptionMethod = IKEEXT_CIPHER_AES_GCM_256_16ICV;
+    policy.dwCipherTransformConstant = IKEEXT_CIPHER_AES_GCM_256_16ICV;
+    policy.dwAuthTransformConstant = IPSEC_CIPHER_CONFIG_GCM_AES_256;
+    policy.dwPfsGroup = IPSEC_PFS_NONE;
+    policy.dwDhGroup = IKEEXT_DH_ECP_384;
+
+    // This is the byte order they are in `CustomIPSecPolicies` field
+    // inside `%APPDATA%\Microsoft\Network\Connections\Pbk\rasphone.pbk`
+    BYTE custom_ipsec_policies[24] = { 0 };
+    copy_dword_bytes(&custom_ipsec_policies[0], policy.dwIntegrityMethod);
+    copy_dword_bytes(&custom_ipsec_policies[4], policy.dwEncryptionMethod);
+    copy_dword_bytes(&custom_ipsec_policies[8], policy.dwCipherTransformConstant);
+    copy_dword_bytes(&custom_ipsec_policies[12], policy.dwAuthTransformConstant);
+    copy_dword_bytes(&custom_ipsec_policies[16], policy.dwDhGroup);
+    copy_dword_bytes(&custom_ipsec_policies[20], policy.dwPfsGroup);
+
+    // characters are either written in 02d or 02x format
     wprintf(L"\nDEMO:\n");
     for (DWORD i = 0; i < 24; i++) {
-        wprintf(L"%d", policy.bytes[i]);
+        wprintf(L"%02d", custom_ipsec_policies[i]);
     }
-    
+    wprintf(L"\n");
 }
 
 DWORD RemoveEntry(LPCTSTR entry_name) {
@@ -731,8 +741,6 @@ int wmain(int argc, wchar_t* argv[]) {
             i += 1;
         }
     }
-
-    // Demo();
 
     return 0;
 }
