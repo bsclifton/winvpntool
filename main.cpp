@@ -55,34 +55,6 @@ void PrintRasError(DWORD error) {
     PrintSystemError(error);
 }
 
-// https://docs.microsoft.com/en-us/windows/win32/api/mprapi/nf-mprapi-mprconfiginterfaceenum
-int PrintInterfaces() {
-    HANDLE hMprConfig = INVALID_HANDLE_VALUE;
-    DWORD dwRet = MprConfigServerConnect(NULL, &hMprConfig);
-    if (dwRet != ERROR_SUCCESS) {
-        PrintRasError(dwRet);
-    }
-
-    LPBYTE lpBuffer = NULL;
-    DWORD entries_read = 0, total_entries = 0;
-    dwRet = MprConfigInterfaceEnum(hMprConfig, 0, &lpBuffer, -1, &entries_read, &total_entries, NULL);
-    if (dwRet == NO_ERROR) {
-        for (DWORD i = 0; i < entries_read; i++) {
-            // MPR_INTERFACE_0 interface = lpBuffer[i];
-        }
-    } else {
-        wprintf(L"Error calling MprConfigInterfaceEnum: ");
-        PrintRasError(dwRet);
-    }
-
-    if (lpBuffer) {
-        MprConfigBufferFree(lpBuffer);
-        lpBuffer = NULL;
-    }
-
-    return 0;
-}
-
 int PrintConnectionDetails(HRASCONN connection) {
     DWORD dwCb = 0;
     DWORD dwRet = ERROR_SUCCESS;
@@ -408,6 +380,9 @@ int PrintEntryDetails(LPCTSTR entry_name) {
         PrintOptions(lpRasEntry->dwfOptions);
         PrintOptions2(lpRasEntry->dwfOptions2);
 
+        // RasGetEntryAdvancedProperties();
+
+
         // https://docs.microsoft.com/en-us/windows/win32/api/ras/nf-ras-rasgetcustomauthdataa
         LPBYTE custom_auth_data = NULL;
         dwRet = RasGetCustomAuthData(DEFAULT_PHONE_BOOK, entry_name, custom_auth_data, &dwCb);
@@ -590,60 +565,113 @@ DWORD CreateEntry(LPCTSTR entry_name, LPCTSTR hostname, LPCTSTR username, LPCTST
 
     dwRet = SetCredentials(entry_name, username, password);
 
+    // ############################
     // Policy needs to be set, otherwise you'll see an error like this in `eventvwr`:
     // >> The user DESKTOP - DRCJVG6\brian dialed a connection named BRAVEVPN which has failed.The error code returned on failure is 13868.
     // 
     // I've found you can set this manually via PowerShell using the `Set-VpnConnectionIPsecConfiguration` cmdlet:
     // https://docs.microsoft.com/en-us/powershell/module/vpnclient/set-vpnconnectionipsecconfiguration?view=windowsserver2019-ps
     // 
-    // I've used the following parameters via PowerShell
-    // >> AuthenticationTransformConstants: GCMAES256 -
+    // I've used the following parameters via PowerShell:
+    // >> AuthenticationTransformConstants: GCMAES256
     // >> CipherTransformConstants : GCMAES256
-    // >> DHGroup : ECP384 - 
-    // >> IntegrityCheckMethod : SHA256 -
-    // >> PfsGroup : None -
+    // >> DHGroup : ECP384
+    // >> IntegrityCheckMethod : SHA256
+    // >> PfsGroup : None
     // >> EncryptionMethod : GCMAES256
     //
-    // In C++, we use the MPR API to set these.
-    PROUTER_CUSTOM_IKEv2_POLICY0 lpCustomIkev2Policy;
-    lpCustomIkev2Policy = (PROUTER_CUSTOM_IKEv2_POLICY0)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(ROUTER_CUSTOM_IKEv2_POLICY0));
-    if (lpCustomIkev2Policy == NULL) {
-        // Handle OOM
-        wprintf(L"\nwhoops; out of memory");
-    }
+    // That cmdlet is part of the `VpnConnection` PowerShell module. The module is defined here:
+    // `C:\Windows\System32\WindowsPowerShell\v1.0\Modules\VpnClient`
+    // 
+    // The module has .cdxml and .ps1xml definitions which bind itself to the `VpnConnectionIPsecConfiguration`
+    // definitions in MOF (Managed Object Format) which is found here:
+    // `C:\Windows\System32\wbem\vpnclientpsprovider.mof`
+    // 
+    // The implementation is provided by `VPNClientPSProvider.dll` and PowerShell is calling the `SetByCustomPolicy` method:
+    // https://docs.microsoft.com/en-us/previous-versions/windows/desktop/vpnclientpsprov/setbycustompolicy-ps-vpnconnectionipsecconfiguration
+    // 
+    // ############################
+    // 
+    // For Win32/C++, I've found the MPR (Multiprotocol Routing) APIs have a field `ROUTER_CUSTOM_IKEv2_POLICY0` which lines 
+    // up almost perfectly with that definition. However, the `Routing and Remote Access` service in Windows is disabled by default.
+    // Calls to both the config and admin APIs using MPR fail when enumerating interfaces because the service is not running.
+    // 
+    // ############################
+    // 
+    // I've confirmed by opening `VPNClientPSProvider.dll` in an open source version of the `depends.exe` utility (https://github.com/lucasg/Dependencies)
+    // that `rasapi32.dll` is being used for interacting with VPN. Interestingly, there are some methods exported in `raspi32.dll`
+    // which aren't defined in `Ras.h`:
+    // 
+    // - RasFreeEntryAdvancedProperties
+    // - RasGetEntryAdvancedProperties
+    // - RasSetEntryAdvancedProperties
+    // 
+    // It doesn't seem to be using MPR at all, which is good to see (ex: no references to `Mprapi.dll`).
+    // I'm on the right track looking more at RAS.
+    // 
+    // ############################
+    // 
+    // Going back to the `ROUTER_CUSTOM_IKEv2_POLICY0` I was lucky to find this blog post by Gary Nebbett:
+    // https://gary-nebbett.blogspot.com/2019/12/implementing-ikev2-vpn-client-under.html?m=1
+    // 
+    // Which shares:
+    // 
+    // >> The format of proposals stored in rasphone.pbk exhibits the same problem (one transform of each type per proposal). 
+    // >> They are stored as a sequence of serialized ROUTER_CUSTOM_IKEv2_POLICY_0 structures with the name “CustomIPSecPolicies”; 
+    // >> “NumCustomPolicy” records how many proposals there are. 
+    // >> Set-VpnConnectionIPsecConfiguration always creates a single custom IPsec policy, but manual editing of rasphone.pbk can be used to add more.
+    // 
+    // As captured in blog post, RAS stores the phone book used by the user here:
+    // `%APPDATA%\Microsoft\Network\Connections\Pbk\rasphone.pbk`
+    // 
+    // Sure enough, I found the fields mentioned by the post in here (`CustomIPSecPolicies` / `NumCustomPolicy`).
+    // 
+    // ############################
+    // 
+    // At this point - I think the undocumented methods I found are likely called by PowerShell (ex: `RasGetEntryAdvancedProperties`)
+    // 
+    // I'm going to try to define/call these methods and see what happens
+    // 
+    // Worst case: we can manually add the entry (or field) to the `%APPDATA%\Microsoft\Network\Connections\Pbk\rasphone.pbk` file.
+    // 
+    // NOTE: *This IKEv2 implementation (due to policy) might only be supported on Windows 8 and above; we need to check that.*
+    // 
 
-    // Work in progress
-    // For more info, see example at https://github.com/microsoft/Windows-classic-samples/blob/27ffb0811ca761741502feaefdb591aebf592193/Samples/RoutingandRemoteAccessService/cpp/InterfaceConfiguration.cpp#L505
-    lpCustomIkev2Policy->dwIntegrityMethod = IKEEXT_INTEGRITY_SHA_256;
-    lpCustomIkev2Policy->dwEncryptionMethod = IKEEXT_CIPHER_AES_GCM_256_16ICV;
-    lpCustomIkev2Policy->dwCipherTransformConstant = IKEEXT_CIPHER_AES_GCM_256_16ICV;
-    lpCustomIkev2Policy->dwAuthTransformConstant = IPSEC_AUTH_CONFIG_GCM_AES_256;
-    lpCustomIkev2Policy->dwPfsGroup = IPSEC_PFS_NONE;
-    lpCustomIkev2Policy->dwDhGroup = IKEEXT_DH_ECP_384;
+    union {
+        ROUTER_CUSTOM_IKEv2_POLICY0 object;
+        DWORD fields[6];
+        BYTE bytes[24];
+    } policy;
+    
+    policy.object.dwIntegrityMethod = IKEEXT_INTEGRITY_SHA_256;
+    policy.object.dwEncryptionMethod = IKEEXT_CIPHER_AES_GCM_256_16ICV;
+    policy.object.dwCipherTransformConstant = IKEEXT_CIPHER_AES_GCM_256_16ICV;
+    policy.object.dwAuthTransformConstant = IPSEC_AUTH_CONFIG_GCM_AES_256;
+    policy.object.dwPfsGroup = IPSEC_PFS_NONE;
+    policy.object.dwDhGroup = IKEEXT_DH_ECP_384;
 
-    MPR_IF_CUSTOMINFOEX mprInterfaceCustomInfo;
-    ZeroMemory(&mprInterfaceCustomInfo, sizeof(MPR_IF_CUSTOMINFOEX));
-    mprInterfaceCustomInfo.Header.revision = MPRAPI_MPR_IF_CUSTOM_CONFIG_OBJECT_REVISION_2;
-    mprInterfaceCustomInfo.Header.type = MPRAPI_OBJECT_TYPE_IF_CUSTOM_CONFIG_OBJECT;
-    mprInterfaceCustomInfo.Header.size = sizeof(MPR_IF_CUSTOMINFOEX);
-    mprInterfaceCustomInfo.dwFlags = MPRAPI_IF_CUSTOM_CONFIG_FOR_IKEV2;
-    mprInterfaceCustomInfo.customIkev2Config.customPolicy = lpCustomIkev2Policy;
-
-    HANDLE hMprConfig = INVALID_HANDLE_VALUE;
-    dwRet = MprConfigServerConnect(NULL, &hMprConfig);
-    if (dwRet != ERROR_SUCCESS) {
-        PrintRasError(dwRet);
-    }
-
-    //HANDLE hRouterInterface = INVALID_HANDLE_VALUE;
-    //dwRet = MprConfigInterfaceGetHandle(hMprConfig, NULL, &hRouterInterface);
-
-    // MprConfigInterfaceSetCustomInfoEx()
-    // TODO: ...
-
-    HeapFree(GetProcessHeap(), 0, lpCustomIkev2Policy);
 
     return ERROR_SUCCESS;
+}
+
+void Demo() {
+    union {
+        ROUTER_CUSTOM_IKEv2_POLICY0 object;
+        DWORD fields[6];
+        BYTE bytes[24];
+    } policy;
+
+    policy.object.dwIntegrityMethod = IKEEXT_INTEGRITY_SHA_256;
+    policy.object.dwEncryptionMethod = IKEEXT_CIPHER_AES_GCM_256_16ICV;
+    policy.object.dwCipherTransformConstant = IKEEXT_CIPHER_AES_GCM_256_16ICV;
+    policy.object.dwAuthTransformConstant = IPSEC_AUTH_CONFIG_GCM_AES_256;
+    policy.object.dwPfsGroup = IPSEC_PFS_NONE;
+    policy.object.dwDhGroup = IKEEXT_DH_ECP_384;
+    wprintf(L"\nDEMO:\n");
+    for (DWORD i = 0; i < 24; i++) {
+        wprintf(L"%d", policy.bytes[i]);
+    }
+    
 }
 
 DWORD RemoveEntry(LPCTSTR entry_name) {
@@ -703,6 +731,8 @@ int wmain(int argc, wchar_t* argv[]) {
             i += 1;
         }
     }
+
+    // Demo();
 
     return 0;
 }
