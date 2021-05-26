@@ -562,7 +562,6 @@ DWORD CreateEntry(LPCTSTR entry_name, LPCTSTR hostname, LPCTSTR username, LPCTST
 
     dwRet = SetCredentials(entry_name, username, password);
 
-    // ############################
     // Policy needs to be set, otherwise you'll see an error like this in `eventvwr`:
     // >> The user DESKTOP - DRCJVG6\brian dialed a connection named BRAVEVPN which has failed.The error code returned on failure is 13868.
     // 
@@ -577,111 +576,52 @@ DWORD CreateEntry(LPCTSTR entry_name, LPCTSTR hostname, LPCTSTR username, LPCTST
     // >> PfsGroup : None
     // >> EncryptionMethod : GCMAES256
     //
-    // That cmdlet is part of the `VpnConnection` PowerShell module. The module is defined here:
-    // `C:\Windows\System32\WindowsPowerShell\v1.0\Modules\VpnClient`
-    // 
-    // The module has .cdxml and .ps1xml definitions which bind itself to the `VpnConnectionIPsecConfiguration`
-    // definitions in MOF (Managed Object Format) which is found here:
-    // `C:\Windows\System32\wbem\vpnclientpsprovider.mof`
-    // 
-    // The implementation is provided by `VPNClientPSProvider.dll` and PowerShell is calling the `SetByCustomPolicy` method:
-    // https://docs.microsoft.com/en-us/previous-versions/windows/desktop/vpnclientpsprov/setbycustompolicy-ps-vpnconnectionipsecconfiguration
-    // 
-    // ############################
-    // 
-    // For Win32/C++, I've found the MPR (Multiprotocol Routing) APIs have a field `ROUTER_CUSTOM_IKEv2_POLICY0` which lines 
-    // up almost perfectly with that definition. However, the `Routing and Remote Access` service in Windows is disabled by default.
-    // Calls to both the config and admin APIs using MPR fail when enumerating interfaces because the service is not running.
-    // 
-    // ############################
-    // 
-    // I've confirmed by opening `VPNClientPSProvider.dll` in an open source version of the `depends.exe` utility (https://github.com/lucasg/Dependencies)
-    // that `rasapi32.dll` is being used for interacting with VPN. Interestingly, there are some methods exported in `raspi32.dll`
-    // which aren't defined in `Ras.h`:
-    // 
-    // - RasFreeEntryAdvancedProperties
-    // - RasGetEntryAdvancedProperties
-    // - RasSetEntryAdvancedProperties
-    // 
-    // It doesn't seem to be using MPR at all, which is good to see (ex: no references to `Mprapi.dll`).
-    // I'm on the right track looking more at RAS.
-    // 
-    // ############################
-    // 
-    // Going back to the `ROUTER_CUSTOM_IKEv2_POLICY0` I was lucky to find this blog post by Gary Nebbett:
-    // https://gary-nebbett.blogspot.com/2019/12/implementing-ikev2-vpn-client-under.html?m=1
-    // 
-    // Which shares:
-    // 
-    // >> The format of proposals stored in rasphone.pbk exhibits the same problem (one transform of each type per proposal). 
-    // >> They are stored as a sequence of serialized ROUTER_CUSTOM_IKEv2_POLICY_0 structures with the name “CustomIPSecPolicies”; 
-    // >> “NumCustomPolicy” records how many proposals there are. 
-    // >> Set-VpnConnectionIPsecConfiguration always creates a single custom IPsec policy, but manual editing of rasphone.pbk can be used to add more.
-    // 
-    // As captured in blog post, RAS stores the phone book used by the user here:
+    // RAS doesn't expose public methods for editing policy. However, the storage is just an INI format file:
     // `%APPDATA%\Microsoft\Network\Connections\Pbk\rasphone.pbk`
     // 
-    // Sure enough, I found the fields mentioned by the post in here (`CustomIPSecPolicies` / `NumCustomPolicy`).
-    // 
-    // ############################
-    // 
-    // I suspect the PowerShell is either calling the undocumented API (ex: ``) or writing the fields manually.
-    // We should write the fields manually.
-    // 
-    // ############################
+    // The variable being set in this file is similar to the structure `ROUTER_CUSTOM_IKEv2_POLICY0` which was 
+    // part of MPR (Multiprotocol Routing). The DWORDs are written out byte by byte in 02d format as `CustomIPSecPolicies`
+    // and `NumCustomPolicy` is always being set to 1.
     // 
     // NOTE: *This IKEv2 implementation (due to policy) might only be supported on Windows 8 and above; we need to check that.*
     // 
 
-    // for an example of how this value is generated (hardcoded for now), see below Demo() function
-    wchar_t replacement[] = L"NumCustomPolicy=1\r\nCustomIPSecPolicies=020000000600000005000000080000000500000000000000";
+    wchar_t NumCustomPolicy[] = L"1";
+    wchar_t CustomIPSecPolicies[] = L"020000000600000005000000080000000500000000000000";
+    wchar_t AppDataPath[1025] = { 0 };
+    wchar_t PhonebookPath[2048] = { 0 };
 
-    // TODO:
-    // 
-    // 1. Open phonebook file (`%APPDATA%\Microsoft\Network\Connections\Pbk\rasphone.pbk`)
-    // 2. Find value `NumCustomPolicy=0` in file for entry `[entry_name]`
-    // 3. do replacement
+    dwRet = ExpandEnvironmentStrings(TEXT("%APPDATA%"), AppDataPath, 1024);
+    if (dwRet != ERROR_SUCCESS) {
+        PrintRasError(dwRet);
+        // TODO: handle error here
+    }
+
+    swprintf(PhonebookPath, 2048, L"%s\\Microsoft\\Network\\Connections\\Pbk\\rasphone.pbk", AppDataPath);
+
+    BOOL wrote_entry = WritePrivateProfileString(
+        entry_name,
+        L"NumCustomPolicy",
+        NumCustomPolicy,
+        PhonebookPath
+    );
+    if (!wrote_entry) {
+        wprintf(L"ERROR: failed to write \"NumCustomPolicy\" field to `rasphone.pbk`");
+        // TODO: handle error here
+    }
+
+    wrote_entry = WritePrivateProfileString(
+        entry_name,
+        L"CustomIPSecPolicies",
+        CustomIPSecPolicies,
+        PhonebookPath
+    );
+    if (!wrote_entry) {
+        wprintf(L"ERROR: failed to write \"CustomIPSecPolicies\" field to `rasphone.pbk`");
+        // TODO: handle error here
+    }
 
     return ERROR_SUCCESS;
-}
-
-void copy_dword_bytes(BYTE* bytes, DWORD value) {
-    if (bytes) {
-        union {
-            DWORD value;
-            BYTE bytes[4];
-        } converter;
-        converter.value = value;
-        memcpy(bytes, converter.bytes, 4);
-    }
-}
-
-void Demo() {
-    // These are the values set
-    ROUTER_CUSTOM_IKEv2_POLICY0 policy;
-    policy.dwIntegrityMethod = IKEEXT_INTEGRITY_SHA_256;
-    policy.dwEncryptionMethod = IKEEXT_CIPHER_AES_GCM_256_16ICV;
-    policy.dwCipherTransformConstant = IKEEXT_CIPHER_AES_GCM_256_16ICV;
-    policy.dwAuthTransformConstant = IPSEC_CIPHER_CONFIG_GCM_AES_256;
-    policy.dwPfsGroup = IPSEC_PFS_NONE;
-    policy.dwDhGroup = IKEEXT_DH_ECP_384;
-
-    // This is the byte order they are in `CustomIPSecPolicies` field
-    // inside `%APPDATA%\Microsoft\Network\Connections\Pbk\rasphone.pbk`
-    BYTE custom_ipsec_policies[24] = { 0 };
-    copy_dword_bytes(&custom_ipsec_policies[0], policy.dwIntegrityMethod);
-    copy_dword_bytes(&custom_ipsec_policies[4], policy.dwEncryptionMethod);
-    copy_dword_bytes(&custom_ipsec_policies[8], policy.dwCipherTransformConstant);
-    copy_dword_bytes(&custom_ipsec_policies[12], policy.dwAuthTransformConstant);
-    copy_dword_bytes(&custom_ipsec_policies[16], policy.dwDhGroup);
-    copy_dword_bytes(&custom_ipsec_policies[20], policy.dwPfsGroup);
-
-    // characters are either written in 02d or 02x format
-    wprintf(L"\nDEMO:\n");
-    for (DWORD i = 0; i < 24; i++) {
-        wprintf(L"%02d", custom_ipsec_policies[i]);
-    }
-    wprintf(L"\n");
 }
 
 DWORD RemoveEntry(LPCTSTR entry_name) {
