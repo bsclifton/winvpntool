@@ -644,11 +644,25 @@ DWORD Connect(LPCTSTR entry_name) {
     }
     lpRasDialParams->dwSize = sizeof(RASDIALPARAMS);
     wcscpy_s(lpRasDialParams->szEntryName, 256, entry_name);
+    wcscpy_s(lpRasDialParams->szDomain, 15, L"*");
+    // https://docs.microsoft.com/en-us/windows/win32/api/ras/nf-ras-rasgetcredentialsw
+    RASCREDENTIALS credentials;
+
+    ZeroMemory(&credentials, sizeof(RASCREDENTIALS));
+    credentials.dwSize = sizeof(RASCREDENTIALS);
+    credentials.dwMask = RASCM_UserName | RASCM_Password;
+    DWORD dwRet = RasGetCredentials(DEFAULT_PHONE_BOOK, entry_name, &credentials);
+    if (dwRet != ERROR_SUCCESS) {
+        HeapFree(GetProcessHeap(), 0, (LPVOID)lpRasDialParams);
+        PrintRasError(dwRet);
+        return dwRet;
+    }
+    wcscpy_s(lpRasDialParams->szUserName, 256, credentials.szUserName);
+    wcscpy_s(lpRasDialParams->szPassword, 256, credentials.szPassword);
 
     wprintf(L"Connecting to `%s`...\n", entry_name);
-
     HRASCONN hRasConn = NULL;
-    DWORD dwRet = RasDial(NULL, DEFAULT_PHONE_BOOK, lpRasDialParams, NULL, NULL, &hRasConn);
+    dwRet = RasDial(NULL, DEFAULT_PHONE_BOOK, lpRasDialParams, NULL, NULL, &hRasConn);
     if (dwRet != ERROR_SUCCESS) {
         HeapFree(GetProcessHeap(), 0, (LPVOID)lpRasDialParams);
         PrintRasError(dwRet);
