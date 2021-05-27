@@ -586,38 +586,37 @@ DWORD CreateEntry(LPCTSTR entry_name, LPCTSTR hostname, LPCTSTR username, LPCTST
     // NOTE: *This IKEv2 implementation (due to policy) might only be supported on Windows 8 and above; we need to check that.*
     // 
 
-    wchar_t NumCustomPolicy[] = L"1";
-    wchar_t CustomIPSecPolicies[] = L"020000000600000005000000080000000500000000000000";
+    // https://docs.microsoft.com/en-us/windows/win32/api/processenv/nf-processenv-expandenvironmentstringsa
     wchar_t AppDataPath[1025] = { 0 };
-    wchar_t PhonebookPath[2048] = { 0 };
-
     dwRet = ExpandEnvironmentStrings(TEXT("%APPDATA%"), AppDataPath, 1024);
-    if (dwRet != ERROR_SUCCESS) {
-        PrintRasError(dwRet);
+    if (dwRet == 0) {
+        PrintRasError(GetLastError());
         // TODO: handle error here
     }
 
+    wchar_t PhonebookPath[2048] = { 0 };
     swprintf(PhonebookPath, 2048, L"%s\\Microsoft\\Network\\Connections\\Pbk\\rasphone.pbk", AppDataPath);
 
+    // https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-writeprivateprofilestringw
     BOOL wrote_entry = WritePrivateProfileString(
         entry_name,
         L"NumCustomPolicy",
-        NumCustomPolicy,
+        L"1",
         PhonebookPath
     );
     if (!wrote_entry) {
-        wprintf(L"ERROR: failed to write \"NumCustomPolicy\" field to `rasphone.pbk`");
+        wprintf(L"ERROR: failed to write \"NumCustomPolicy\" field to `%s`", PhonebookPath);
         // TODO: handle error here
     }
 
     wrote_entry = WritePrivateProfileString(
         entry_name,
         L"CustomIPSecPolicies",
-        CustomIPSecPolicies,
+        L"020000000600000005000000080000000500000000000000",
         PhonebookPath
     );
     if (!wrote_entry) {
-        wprintf(L"ERROR: failed to write \"CustomIPSecPolicies\" field to `rasphone.pbk`");
+        wprintf(L"ERROR: failed to write \"CustomIPSecPolicies\" field to `%s`", PhonebookPath);
         // TODO: handle error here
     }
 
