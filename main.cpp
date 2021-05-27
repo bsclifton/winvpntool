@@ -632,9 +632,46 @@ DWORD RemoveEntry(LPCTSTR entry_name) {
     return dwRet;
 }
 
+// https://docs.microsoft.com/en-us/windows/win32/api/ras/nf-ras-rasdiala
+DWORD Connect(LPCTSTR entry_name) {
+    LPRASDIALPARAMS lpRasDialParams = NULL;
+    DWORD cb = sizeof(RASDIALPARAMS);
+
+    lpRasDialParams = (LPRASDIALPARAMS)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, cb);
+    if (lpRasDialParams == NULL) {
+        wprintf(L"HeapAlloc failed!\n");
+        return 0;
+    }
+    lpRasDialParams->dwSize = sizeof(RASDIALPARAMS);
+    wcscpy_s(lpRasDialParams->szEntryName, 256, entry_name);
+
+    wprintf(L"Connecting to `%s`...\n", entry_name);
+
+    HRASCONN hRasConn = NULL;
+    DWORD dwRet = RasDial(NULL, DEFAULT_PHONE_BOOK, lpRasDialParams, NULL, NULL, &hRasConn);
+    if (dwRet != ERROR_SUCCESS) {
+        HeapFree(GetProcessHeap(), 0, (LPVOID)lpRasDialParams);
+        PrintRasError(dwRet);
+        return dwRet;
+    }
+    wprintf(L"SUCCESS!\n");
+    
+    // store handle if needed, etc
+    //..
+
+    HeapFree(GetProcessHeap(), 0, (LPVOID)lpRasDialParams);
+
+    return ERROR_SUCCESS;
+}
+
+// https://docs.microsoft.com/en-us/windows/win32/api/ras/nf-ras-rashangupa
+DWORD Disconnect(LPCTSTR entry_name) {
+    return ERROR_SUCCESS;
+}
+
 int wmain(int argc, wchar_t* argv[]) {    
     if (argc == 1) {
-        wprintf(L"usage: winvpntool.exe [--connections] [--devices] [--entries] [--create hostname username password] [--remove]");
+        wprintf(L"usage: winvpntool.exe [--connections] [--devices] [--entries] [--create hostname username password] [--remove entry_name] [--connect entry_name]");
         return 0;
     }
 
@@ -668,7 +705,7 @@ int wmain(int argc, wchar_t* argv[]) {
         
         if (wcscmp(argv[i], L"--remove") == 0) {
             if ((i + 1) >= argc) {
-                wprintf(L"missing parameters for create!\nusage: winvpntool.exe --remove entry_name");
+                wprintf(L"missing parameters for remove!\nusage: winvpntool.exe --remove entry_name");
                 return 0;
             }
 
@@ -676,6 +713,20 @@ int wmain(int argc, wchar_t* argv[]) {
             wcscpy_s(entry_name, 256, argv[i + 1]);
 
             RemoveEntry(entry_name);
+
+            i += 1;
+        }
+
+        if (wcscmp(argv[i], L"--connect") == 0) {
+            if ((i + 1) >= argc) {
+                wprintf(L"missing parameters for create!\nusage: winvpntool.exe --connect entry_name");
+                return 0;
+            }
+
+            wchar_t entry_name[257] = { 0 };
+            wcscpy_s(entry_name, 256, argv[i + 1]);
+
+            Connect(entry_name);
 
             i += 1;
         }
