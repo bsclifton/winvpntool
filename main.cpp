@@ -612,7 +612,7 @@ DWORD CreateEntry(LPCTSTR entry_name, LPCTSTR hostname, LPCTSTR username, LPCTST
     wrote_entry = WritePrivateProfileString(
         entry_name,
         L"CustomIPSecPolicies",
-        L"020000000600000005000000080000000500000000000000",
+        L"030000000400000002000000050000000200000000000000",
         PhonebookPath
     );
     if (!wrote_entry) {
